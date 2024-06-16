@@ -1,2 +1,2 @@
 # Pascal
-High performance low latency Order Matching Engine
+Faster Equities Trading and Arbitrage
