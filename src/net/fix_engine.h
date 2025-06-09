@@ -3,13 +3,19 @@
 #include <atomic>
 #include <unordered_map>
 #include <string>
-#include <function>
+#include <functional>
 
+#include "ed25519_signer.h"
 #include "quickfix/Application.h"
 #include "quickfix/MessageCracker.h"
 #include "quickfix/Mutex.h"
 #include "quickfix/Utility.h"
 #include "quickfix/Values.h"
+#include "quickfix/FileStore.h"
+#include "quickfix/FileLog.h"
+#include "quickfix/SocketInitiator.h"
+#include "quickfix/Session.h"
+#include "quickfix/SessionSettings.h"
 
 #include "quickfix/fix44/MarketDataRequestReject.h"
 #include "quickfix/fix44/MarketDataRequest.h"
@@ -22,10 +28,16 @@ namespace pascal {
 
         class FIXMarketDataEngine : public FIX::Application, public FIX::MessageCracker {
         public:
+            std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
+            std::string api_key;
+            using MarketDataCallback = std::function<void(const std::string& symbol, FIX::Message& message)>;
 
-            using MarketDataCallback = std::function<void(const std::string& symbol, FIX::message& message)>;
-
-            FIXMarketDataEngine(const std::string& fixConfig);
+            FIXMarketDataEngine(const std::string& fixConfig, const std::string& private_key_pem, const std::string& api_key) : api_key(api_key), signer_(std::make_unique<pascal::crypto::Ed25519Signer>(private_key_pem)) {
+                settings_ = std::make_unique<FIX::SessionSettings>(fixConfig);
+                store_factory_ = std::make_unique<FIX::FileStoreFactory>(settings_);
+                log_factory_ = std::make_unique<FIX::FileLogFactory>(settings_);
+                initiator_ = std::make_unique<FIX::SocketInitiator>(*this, *store_factory_, *settings_, *log_factory_); 
+            };
             ~FIXMarketDataEngine();
 
             //Application overloads
@@ -33,19 +45,19 @@ namespace pascal {
             void onLogon(const FIX::SessionID& ) override;
             void onLogout(const FIX::SessionID& )override;
             void toAdmin(FIX::Message&, const FIX::SessionID& ) override;
-            void toApp(FIX::Message&, const FIX::SessionID& ) EXCEPT(FIX::DoNotSend) override;
-            void fromAdmin(FIX::Message&, const FIX::SessionID& ) EXCEPT(FIX::FieldNotFound, FIX::IncorrectDataFormat, FIX::IncorrectTagValue, FIX::RejectLogon) override;
-            void fromApp(FIX::Message&, const FIX::SessionID&) EXCEPT(FIX::FieldNotFound, FIX::IncorrectDataFormat, FIX::IncorrectTagValue, FIX::UnsupportedMessageType) override;
+            void toApp(FIX::Message&, const FIX::SessionID& ) override;
+            void fromAdmin(const FIX::Message&, const FIX::SessionID& ) override;
+            void fromApp(const FIX::Message&, const FIX::SessionID&) override;
 
             //Message overloads
-            void onMessage(const FIX44::MarketDataRequestReject&, const FIX::SessionID& );
+            //void onMessage(const FIX44::MarketDataRequestReject&, const FIX::SessionID& );
             void onMessage(const FIX44::MarketDataSnapshotFullRefresh&, const FIX::SessionID& );
             void onMessage(const FIX44::MarketDataIncrementalRefresh&, const FIX::SessionID& );
             
             //Engine logic
-            void sub_to_symbol(const std::string& symbol, MarketDataSubscriptionType = FULL_BOOK);
+            void sub_to_symbol(const std::string& symbol, enum MarketDataSubscriptionType sub);
             void unsub_to_symbol(const std::string& symbol);
-            void set_market_data_callback(MarketDataCallack clbk);
+            void set_market_data_callback(MarketDataCallback clbk);
 
             //Application lifecycle
             bool start();
@@ -55,7 +67,9 @@ namespace pascal {
         
         private:
             //Market data subscription types
-            enum MarketDataSubscriptionType {
+            void sign_logon_message(FIX::Message& message);
+            std::string create_logon_payload(const FIX::Message& message);
+            typedef enum MarketDataSubscriptionType {
                 RAW_TRADE,
                 TOP_OF_BOOK,
                 FULL_BOOK
