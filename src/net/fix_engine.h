@@ -31,6 +31,20 @@ namespace pascal {
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
             using MarketDataCallback = std::function<void(const std::string& symbol, FIX::Message& message)>;
+            typedef enum MarketDataSubscriptionType {
+                RAW_TRADE,
+                TOP_OF_BOOK,
+                FULL_BOOK
+            };
+
+            struct MarketDataRequest {
+                MarketDataSubscriptionType Stream;
+                std::string Symbol;
+                int MarketDepth;
+                char MDEntryType;
+                char Subscribe;
+                std::string ReqID;
+            };
 
             FIXMarketDataEngine(const std::string& fixConfig, const std::string& private_key_pem, const std::string& api_key) : api_key(api_key), signer_(std::make_unique<pascal::crypto::Ed25519Signer>(private_key_pem)) {
                 settings_ = std::make_unique<FIX::SessionSettings>(fixConfig);
@@ -55,7 +69,7 @@ namespace pascal {
             void onMessage(const FIX44::MarketDataIncrementalRefresh&, const FIX::SessionID& );
             
             //Engine logic
-            void sub_to_symbol(const std::string& symbol, enum MarketDataSubscriptionType sub);
+            void sub_to_symbol(MarketDataRequest& req);
             void unsub_to_symbol(const std::string& symbol);
             void set_market_data_callback(MarketDataCallback clbk);
 
@@ -69,11 +83,7 @@ namespace pascal {
             //Market data subscription types
             void sign_logon_message(FIX::Message& message);
             std::string create_logon_payload(const FIX::Message& message);
-            typedef enum MarketDataSubscriptionType {
-                RAW_TRADE,
-                TOP_OF_BOOK,
-                FULL_BOOK
-            };
+
             //Initiators and Settings
             std::unique_ptr<FIX::SocketInitiator> initiator_;
             std::unique_ptr<FIX::SessionSettings> settings_;
@@ -91,7 +101,7 @@ namespace pascal {
             
             std::atomic<int> next_req_id{1};
 
-            void send_market_data_request(const std::string& symbol, MarketDataSubscriptionType stream);
+            std::string send_market_data_request(const MarketDataRequest& req);
             std::string generate_request_id(); //generate MDReqID
         };
     };

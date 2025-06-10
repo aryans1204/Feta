@@ -17,6 +17,7 @@ namespace pascal {
         bool FIXMarketDataEngine::stop() {
             try {
                 initiator_->stop();
+                is_running.store(true);
                 return true;
             }
             catch (std::exception& e) {
@@ -26,6 +27,7 @@ namespace pascal {
         }
         void FIXMarketDataEngine::onLogon(const FIX::SessionID& sessionID) {
             this->sessionID = sessionID;
+            is_logged_on.store(true);
         }
         void FIXMarketDataEngine::toAdmin(FIX::Message& message, const FIX::SessionID& sessionID) {
             FIX::MsgType msgType;
@@ -71,6 +73,66 @@ namespace pascal {
             message.getField(symbol);
             FIX::Message msg = message;
             callback(symbol.getString(), msg);
+        }
+        std::string FIXMarketDataEngine::generate_request_id() {
+            int req_id = next_req_id.fetch_add(1, std::memory_order_relaxed);
+            return std::to_string(req_id);
+
+        }
+        std::string FIXMarketDataEngine::send_market_data_request(const MarketDataRequest& request) {
+            FIX44::MarketDataRequest req;
+            FIX::Header& header = req.getHeader();
+            header.setField(FIX::BeginString("FIX.4.4"));
+            header.setField(FIX::SenderCompID("ARYAN"));
+            header.setField(FIX::TargetCompID("SPOT"));
+            header.setField(FIX::MsgType(FIX::MsgType_MarketDataRequest));
+            req.setField(FIX::SubscriptionRequestType(request.Subscribe));
+            req.setField(FIX::Symbol(request.Symbol));
+            if (request.Subscribe == '2') {
+                req.setField(FIX::MDReqID(request.ReqID));
+                FIX::Session::sendToTarget(req, sessionID);
+                return "";
+            }
+            std::string req_id = generate_request_id(); 
+            req.setField(FIX::MDReqID(req_id));
+            
+            switch(request.Stream) {
+                case MarketDataSubscriptionType::RAW_TRADE:
+                    req.setField(FIX::MDEntryType('2'));
+                    break;
+                
+                case MarketDataSubscriptionType::TOP_OF_BOOK:
+                    req.setField(FIX::MDEntryType(request.MDEntryType));
+                    req.setField(FIX::MarketDepth(1));
+                    break;
+
+                case MarketDataSubscriptionType::FULL_BOOK:
+                    req.setField(FIX::MDEntryType(request.MDEntryType));
+                    req.setField(FIX::MarketDepth(request.MarketDepth));
+                    break;
+                
+                default:
+                    break;
+            }
+            FIX::Session::sendToTarget(req, sessionID);
+            return req_id;
+        }
+        void FIXMarketDataEngine::sub_to_symbol(MarketDataRequest& request) {
+            subscription_mtx.lock();
+            request.Subscribe = '1';
+            std::string req_id = send_market_data_request(request);
+            active_subscriptions[request.Symbol] = req_id;
+            subscription_mtx.unlock();
+        }
+        void FIXMarketDataEngine::unsub_to_symbol(const std::string& symbol) {
+            subscription_mtx.lock();
+            std::string req_id = active_subscriptions[symbol];
+            MarketDataRequest request;
+            request.ReqID = req_id;
+            request.Subscribe = '2';
+            request.Symbol = symbol;
+            send_market_data_request(request);
+            subscription_mtx.unlock();
         }
     }
 }
