@@ -25,6 +25,9 @@ namespace pascal {
                 return false;
             }
         }
+        bool FIXMarketDataEngine::is_logged() const {
+            return is_logged_on.load(std::memory_order_relaxed);
+        }
         void FIXMarketDataEngine::onLogon(const FIX::SessionID& sessionID) {
             this->sessionID = sessionID;
             is_logged_on.store(true);
@@ -60,19 +63,9 @@ namespace pascal {
             return msgType.getString()+SOH+senderCompId.getString()+SOH+targetCompId.getString()+SOH+msgSeqNum.getString()+SOH+sendingTime.getString();
         }
         void FIXMarketDataEngine::fromApp(const FIX::Message& message, const FIX::SessionID& sessionID) {
-            crack(message, sessionID);
-        }
-        void FIXMarketDataEngine::onMessage(const FIX44::MarketDataSnapshotFullRefresh& message, const FIX::SessionID& sessionID) {
-            FIX::Symbol symbol;
-            message.get(symbol);
-            FIX::Message msg = message;
-            callback(symbol.getString(), msg);
-        }
-        void FIXMarketDataEngine::onMessage(const FIX44::MarketDataIncrementalRefresh& message, const FIX::SessionID& sessionID) {
             FIX::Symbol symbol;
             message.getField(symbol);
-            FIX::Message msg = message;
-            callback(symbol.getString(), msg);
+            callback(symbol.getString(), message);
         }
         std::string FIXMarketDataEngine::generate_request_id() {
             int req_id = next_req_id.fetch_add(1, std::memory_order_relaxed);
@@ -133,6 +126,9 @@ namespace pascal {
             request.Symbol = symbol;
             send_market_data_request(request);
             subscription_mtx.unlock();
+        }
+        void FIXMarketDataEngine::set_market_data_callback(MarketDataCallback clbk) {
+            callback = clbk;
         }
     }
 }

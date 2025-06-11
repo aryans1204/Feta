@@ -7,7 +7,6 @@
 
 #include "ed25519_signer.h"
 #include "quickfix/Application.h"
-#include "quickfix/MessageCracker.h"
 #include "quickfix/Mutex.h"
 #include "quickfix/Utility.h"
 #include "quickfix/Values.h"
@@ -26,11 +25,11 @@
 namespace pascal {
     namespace fix {
 
-        class FIXMarketDataEngine : public FIX::Application, public FIX::MessageCracker {
+        class FIXMarketDataEngine : public FIX::Application {
         public:
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
-            using MarketDataCallback = std::function<void(const std::string& symbol, FIX::Message& message)>;
+            using MarketDataCallback = std::function<void(const std::string& symbol, const FIX::Message& message)>;
             typedef enum MarketDataSubscriptionType {
                 RAW_TRADE,
                 TOP_OF_BOOK,
@@ -63,10 +62,6 @@ namespace pascal {
             void fromAdmin(const FIX::Message&, const FIX::SessionID& ) override;
             void fromApp(const FIX::Message&, const FIX::SessionID&) override;
 
-            //Message overloads
-            //void onMessage(const FIX44::MarketDataRequestReject&, const FIX::SessionID& );
-            void onMessage(const FIX44::MarketDataSnapshotFullRefresh&, const FIX::SessionID& );
-            void onMessage(const FIX44::MarketDataIncrementalRefresh&, const FIX::SessionID& );
             
             //Engine logic
             void sub_to_symbol(MarketDataRequest& req);
