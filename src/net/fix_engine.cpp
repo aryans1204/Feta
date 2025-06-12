@@ -1,5 +1,6 @@
 
 #include "fix_engine.h"
+#include <chrono>
 #include "ed25519_signer.h"
 
 namespace pascal {
@@ -64,8 +65,9 @@ namespace pascal {
         }
         void FIXMarketDataEngine::fromApp(const FIX::Message& message, const FIX::SessionID& sessionID) {
             FIX::Symbol symbol;
-            message.getField(symbol);
-            callback(symbol.getString(), message);
+            message.getField(symbol); 
+            auto recv_time = std::chrono::high_resolution_clock::now();
+            parser->parse_message(message, recv_time);
         }
         std::string FIXMarketDataEngine::generate_request_id() {
             int req_id = next_req_id.fetch_add(1, std::memory_order_relaxed);
@@ -125,10 +127,8 @@ namespace pascal {
             request.Subscribe = '2';
             request.Symbol = symbol;
             send_market_data_request(request);
+            active_subscriptions.erase(symbol);
             subscription_mtx.unlock();
-        }
-        void FIXMarketDataEngine::set_market_data_callback(MarketDataCallback clbk) {
-            callback = clbk;
         }
     }
 }

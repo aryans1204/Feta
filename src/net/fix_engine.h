@@ -5,6 +5,7 @@
 #include <string>
 #include <functional>
 
+#include "market_data/fix_parser.h"
 #include "ed25519_signer.h"
 #include "quickfix/Application.h"
 #include "quickfix/Mutex.h"
@@ -29,7 +30,7 @@ namespace pascal {
         public:
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
-            using MarketDataCallback = std::function<void(const std::string& symbol, const FIX::Message& message)>;
+            
             typedef enum MarketDataSubscriptionType {
                 RAW_TRADE,
                 TOP_OF_BOOK,
@@ -49,7 +50,8 @@ namespace pascal {
                 settings_ = std::make_unique<FIX::SessionSettings>(fixConfig);
                 store_factory_ = std::make_unique<FIX::FileStoreFactory>(settings_);
                 log_factory_ = std::make_unique<FIX::FileLogFactory>(settings_);
-                initiator_ = std::make_unique<FIX::SocketInitiator>(*this, *store_factory_, *settings_, *log_factory_); 
+                initiator_ = std::make_unique<FIX::SocketInitiator>(*this, *store_factory_, *settings_, *log_factory_);
+                parser = std::make_unique<pascal::market_data::FIXMarketDataParser>(); 
             };
             ~FIXMarketDataEngine();
 
@@ -66,7 +68,11 @@ namespace pascal {
             //Engine logic
             void sub_to_symbol(MarketDataRequest& req);
             void unsub_to_symbol(const std::string& symbol);
-            void set_market_data_callback(MarketDataCallback clbk);
+            
+            template<class T>
+            void register_parser_callback(T clbk) {
+                parser->register_callback(clbk);
+            }
 
             //Application lifecycle
             bool start();
@@ -92,7 +98,7 @@ namespace pascal {
             std::unordered_map<std::string, std::string> active_subscriptions;  //{Symbol Name: MDReqID}
             FIX::Mutex subscription_mtx;
 
-            MarketDataCallback callback; //callback to process market data as it arrives in fromApp
+            std::unique_ptr<pascal::market_data::FIXMarketDataParser> parser; //callback to process market data as it arrives in fromApp
             
             std::atomic<int> next_req_id{1};
 
