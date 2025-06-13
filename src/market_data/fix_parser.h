@@ -45,7 +45,7 @@ namespace pascal {
             pascal::common::MarketDataEntry parse_raw_trade(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time);
 
             std::atomic<uint64_t> messaged_processed{0};
-            std::atomic<uint64_t> time_spent_processing{1};
+            std::atomic<uint64_t> time_spent_processing{0};
         };
     };
 };

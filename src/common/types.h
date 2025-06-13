@@ -19,18 +19,19 @@ namespace pascal {
 
         struct PriceLevel {
             double Price;
-            int Quantity;
+            double Quantity;
         };
         struct MarketDataEntry {
             Side side;
             PriceLevel priceLevel;
+            UpdateAction update_action;
         };
 
         struct MarketDataIncrement {
             std::string symbol;
             std::vector<MarketDataEntry> md_entries;
-            UpdateAction update_action;
             std::chrono::high_resolution_clock::time_point recv_time;
+            uint32_t marketDepth;
         };
 
         struct MarketDataSnapshot {

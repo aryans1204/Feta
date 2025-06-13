@@ -1,5 +1,6 @@
 #include "fix_parser.h"
 #include "quickfix/fix44/MarketDataSnapshotFullRefresh.h"
+#include <algorithm>
 
 namespace pascal {
     namespace market_data {
@@ -44,14 +45,20 @@ namespace pascal {
                 group.get(MDEntryPx);
                 group.get(MDEntrySize);
                 double price = MDEntryPx.getValue();
-                int qty = MDEntrySize.getValue();
+                double qty = MDEntrySize.getValue();
                 pascal::common::Side side = static_cast<pascal::common::Side>(MDEntryType.getValue());
                 if (side == pascal::common::Side::BID) bids.push_back(pascal::common::PriceLevel{Price: price, Quantity: qty});
                 else asks.push_back(pascal::common::PriceLevel{Price: price, Quantity: qty});
             }
+
             snapshot.asks = std::move(asks);
             snapshot.bids = std::move(bids);
             snapshot.recv_time = recv_time;
+
+            auto end_time = std::chrono::high_resolution_clock::now();
+            uint64_t processing_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time-recv_time).count();
+            messaged_processed.fetch_add(1, std::memory_order_relaxed);
+            time_spent_processing.fetch_add(processing_time, std::memory_order_relaxed);
             return snapshot;
         }
         pascal::common::MarketDataIncrement FIXMarketDataParser::parse_increment(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time) {
@@ -76,13 +83,13 @@ namespace pascal {
                 group.get(MDEntryPx);
                 group.get(MDEntrySize);
                 double price = MDEntryPx.getValue();
-                int qty = MDEntrySize.getValue();
+                double qty = MDEntrySize.getValue();
                 pascal::common::Side side = static_cast<pascal::common::Side>(MDEntryType.getValue());
-                entries.push_back(pascal::common::MarketDataEntry{side: side, priceLevel: pascal::common::PriceLevel{Price: price, Quantity: qty}});
+                entries.push_back(pascal::common::MarketDataEntry{side: side, priceLevel: pascal::common::PriceLevel{Price: price, Quantity: qty}, update_action: static_cast<pascal::common::UpdateAction>(action.getValue())});
             }
 
             update.md_entries = std::move(entries);
-            update.update_action = static_cast<pascal::common::UpdateAction>(action.getValue());
+            update.marketDepth = static_cast<uint32_t>(numEntries);
             return update;
         }
 
