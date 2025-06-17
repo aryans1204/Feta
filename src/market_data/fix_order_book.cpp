@@ -1,10 +1,11 @@
 #include "market_data/fix_order_book.h"
 #include <algorithm>
+#include <mutex>
 
 namespace pascal {
     namespace market_data {
         void FIXOrderBook::initialize_from_snapshot(const pascal::common::MarketDataSnapshot& snapshot) {
-            book_mtx.lock();
+            std::unique_lock(book_mtx);
             for (auto priceLevel : snapshot.bids) {
                 bids[priceLevel.Price] = priceLevel.Quantity;
             }
@@ -14,10 +15,9 @@ namespace pascal {
             is_synchronized_.store(true, std::memory_order_relaxed);
             total_updates_processed.fetch_add(1, std::memory_order_relaxed);
             last_update_time = std::chrono::high_resolution_clock::now();
-            book_mtx.unlock();
         }
         void FIXOrderBook::update_from_increment(const pascal::common::MarketDataIncrement& update) {
-            book_mtx.lock();
+            std::unique_lock(book_mtx);
             for (auto md: update.md_entries) {
                 switch (md.update_action) {
                     case pascal::common::UpdateAction::NEW :
@@ -41,7 +41,6 @@ namespace pascal {
             is_synchronized_.store(true, std::memory_order_relaxed);
             total_updates_processed.fetch_add(1, std::memory_order_relaxed);
             last_update_time = std::chrono::high_resolution_clock::now();
-            book_mtx.unlock();
         }
         void FIXOrderBook::apply_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
             if (side == pascal::common::Side::BID) {
@@ -94,19 +93,15 @@ namespace pascal {
             }
         }
         pascal::common::PriceLevel FIXOrderBook::get_best_bid() const {
-            book_mtx.lock_shared();
-            auto ans = pascal::common::PriceLevel{Price: bids.begin()->first, Quantity: bids.begin()->second};
-            book_mtx.unlock_shared();
-            return ans;
+            std::shared_lock(book_mtx);
+            return pascal::common::PriceLevel{Price: bids.begin()->first, Quantity: bids.begin()->second};
         }
         pascal::common::PriceLevel FIXOrderBook::get_best_ask() const {
-            book_mtx.lock_shared();
-            auto ans =  pascal::common::PriceLevel{Price: asks.begin()->first, Quantity: asks.begin()->second};
-            book_mtx.unlock_shared();
-            return ans;
+            std::shared_lock(book_mtx);
+            return pascal::common::PriceLevel{Price: asks.begin()->first, Quantity: asks.begin()->second};
         }
         std::vector<pascal::common::PriceLevel> FIXOrderBook::get_bids(size_t depth = 10) const {
-            book_mtx.lock_shared();
+            std::shared_lock(book_mtx);
             std::vector<pascal::common::PriceLevel> prices;
             auto it = bids.begin();
             for (int i = 0; i < depth; i++) {
@@ -114,11 +109,10 @@ namespace pascal {
                 it++;
                 if (it == bids.end()) return prices;
             }
-            book_mtx.unlock_shared();
             return prices;
         }
         std::vector<pascal::common::PriceLevel> FIXOrderBook::get_asks(size_t depth = 10) const {
-            book_mtx.lock_shared();
+            std::shared_lock(book_mtx);
             std::vector<pascal::common::PriceLevel> prices;
             auto it = asks.begin();
             for (int i = 0; i < depth; i++) {
@@ -126,20 +120,15 @@ namespace pascal {
                 it++;
                 if (it == asks.end()) return prices;
             }
-            book_mtx.unlock_shared();
             return prices;
         }
         double FIXOrderBook::get_bid_quantity_at_price(double price) {
-            book_mtx.lock_shared();
-            double ans = bids[price];
-            book_mtx.unlock_shared();
-            return ans;
+            std::shared_lock(book_mtx);
+            return bids[price];
         }
         double FIXOrderBook::get_ask_quantity_at_price(double price) {
-            book_mtx.lock_shared();
-            double ans = asks[price];
-            book_mtx.unlock_shared();
-            return ans;
+            std::shared_lock(book_mtx);
+            return asks[price];
         }
         bool FIXOrderBook::is_synchronized() const {
             return is_synchronized_.load(std::memory_order_relaxed);
@@ -148,9 +137,11 @@ namespace pascal {
             return last_update_time;
         }
         size_t FIXOrderBook::get_total_bid_levels() const {
+            std::shared_lock(book_mtx);
             return bids.size();
         }
         size_t FIXOrderBook::get_total_ask_levels() const {
+            std::shared_lock(book_mtx);
             return asks.size();
         }
         uint64_t FIXOrderBook::get_total_updates_processed() const {
@@ -158,14 +149,12 @@ namespace pascal {
         }
 
         void FIXOrderBookManager::add_symbol(const std::string& symbol) {
-            book_mtx.lock();
+            std::unique_lock(book_mtx);
             books[symbol] = std::make_shared<FIXOrderBook>();
-            book_mtx.unlock();
         }
         void FIXOrderBookManager::remove_symbol(const std::string& symbol) {
-            book_mtx.lock();
+            std::unique_lock(book_mtx);
             books.erase(symbol);
-            book_mtx.unlock();
         }
         void FIXOrderBookManager::process_snapshot(const pascal::common::MarketDataSnapshot& snapshot) {
             std::string symbol = snapshot.symbol;

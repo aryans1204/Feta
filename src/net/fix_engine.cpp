@@ -1,6 +1,7 @@
 
 #include "fix_engine.h"
 #include <chrono>
+#include <thread>
 #include "ed25519_signer.h"
 
 namespace pascal {
@@ -8,6 +9,12 @@ namespace pascal {
         bool FIXMarketDataEngine::start() {
             try {
                 initiator_->start();
+                is_running.store(true);
+                for (auto symbol : tradedSymbols) {
+                    symbolsThreads[symbol] = std::make_unique<std::thread>([this, symbol]() {
+                        process_market_data(symbol);
+                    });
+                }
                 return true;
             }
             catch (std::exception& e) {
@@ -18,7 +25,10 @@ namespace pascal {
         bool FIXMarketDataEngine::stop() {
             try {
                 initiator_->stop();
-                is_running.store(true);
+                is_running.store(false);
+                for (auto symbol : tradedSymbols) {
+                    symbolsThreads[symbol]->join();
+                }
                 return true;
             }
             catch (std::exception& e) {
@@ -67,7 +77,7 @@ namespace pascal {
             FIX::Symbol symbol;
             message.getField(symbol); 
             auto recv_time = std::chrono::high_resolution_clock::now();
-            parser->parse_message(message, recv_time);
+            symbolQueues[symbol].push(QueuedFIXMessage(message, recv_time));
         }
         std::string FIXMarketDataEngine::generate_request_id() {
             int req_id = next_req_id.fetch_add(1, std::memory_order_relaxed);
@@ -129,6 +139,14 @@ namespace pascal {
             send_market_data_request(request);
             active_subscriptions.erase(symbol);
             subscription_mtx.unlock();
+        }
+        void FIXMarketDataEngine::process_market_data(const std::string& symbol) {
+            QueuedFIXMessage message;
+            while (true) {
+                if (symbolQueues[symbol].pop(message)) {
+                    parser->parse_message(message.message, message.recv_time);
+                }
+            }
         }
     }
 }

@@ -4,9 +4,11 @@
 #include <unordered_map>
 #include <string>
 #include <functional>
+#include <thread>
 
 #include "market_data/fix_parser.h"
 #include "ed25519_signer.h"
+#include "common/lockfree_spsc_queue.h"
 #include "quickfix/Application.h"
 #include "quickfix/Mutex.h"
 #include "quickfix/Utility.h"
@@ -28,6 +30,15 @@ namespace pascal {
 
         class FIXMarketDataEngine : public FIX::Application {
         public:
+
+            struct QueuedFIXMessage {
+                FIX::Message message;
+                std::chrono::high_resolution_clock::time_point recv_time;
+
+                QueuedFIXMessage() = default;
+                QueuedFIXMessage(const FIX::Message& message, const std::chrono::high_resolution_clock::time_point& recv_time) : message(message), recv_time(recv_time) {}
+            };
+
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
             
@@ -46,7 +57,8 @@ namespace pascal {
                 std::string ReqID;
             };
 
-            FIXMarketDataEngine(const std::string& fixConfig, const std::string& private_key_pem, const std::string& api_key) : api_key(api_key), signer_(std::make_unique<pascal::crypto::Ed25519Signer>(private_key_pem)) {
+            FIXMarketDataEngine(const std::string& fixConfig, const std::string& private_key_pem, const std::string& api_key, const std::vector<std::string>& tradedSymbols) : api_key(api_key), signer_(std::make_unique<pascal::crypto::Ed25519Signer>(private_key_pem)), tradedSymbols(tradedSymbols) 
+            {
                 settings_ = std::make_unique<FIX::SessionSettings>(fixConfig);
                 store_factory_ = std::make_unique<FIX::FileStoreFactory>(settings_);
                 log_factory_ = std::make_unique<FIX::FileLogFactory>(settings_);
@@ -91,6 +103,10 @@ namespace pascal {
             std::unique_ptr<FIX::FileStoreFactory> store_factory_;
             std::unique_ptr<FIX::FileLogFactory> log_factory_;
 
+            //Thread level data queue
+            std::unordered_map<std::string, pascal::common::SPSCQueue<QueuedFIXMessage, 8192>> symbolQueues;
+            std::unordered_map<std::string, std::unique_ptr<std::thread>> symbolsThreads;
+            std::vector<std::string> tradedSymbols;
             FIX::SessionID sessionID;
             std::atomic<bool> is_logged_on{false};
             std::atomic<bool> is_running{false};
@@ -98,12 +114,13 @@ namespace pascal {
             std::unordered_map<std::string, std::string> active_subscriptions;  //{Symbol Name: MDReqID}
             FIX::Mutex subscription_mtx;
 
-            std::unique_ptr<pascal::market_data::FIXMarketDataParser> parser; //callback to process market data as it arrives in fromApp
+            std::unique_ptr<pascal::market_data::FIXMarketDataParser> parser;
             
             std::atomic<int> next_req_id{1};
 
             std::string send_market_data_request(const MarketDataRequest& req);
             std::string generate_request_id(); //generate MDReqID
+            void process_market_data(const std::string& symbol);
         };
     };
 };
