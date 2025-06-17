@@ -9,12 +9,8 @@ namespace pascal {
         bool FIXMarketDataEngine::start() {
             try {
                 initiator_->start();
-                is_running.store(true);
-                for (auto symbol : tradedSymbols) {
-                    symbolsThreads[symbol] = std::make_unique<std::thread>([this, symbol]() {
-                        process_market_data(symbol);
-                    });
-                }
+                is_running.store(true, std::memory_order_release);
+                start_symbol_processing();
                 return true;
             }
             catch (std::exception& e) {
@@ -25,10 +21,7 @@ namespace pascal {
         bool FIXMarketDataEngine::stop() {
             try {
                 initiator_->stop();
-                is_running.store(false);
-                for (auto symbol : tradedSymbols) {
-                    symbolsThreads[symbol]->join();
-                }
+                stop_symbol_processing();
                 return true;
             }
             catch (std::exception& e) {
@@ -77,7 +70,7 @@ namespace pascal {
             FIX::Symbol symbol;
             message.getField(symbol); 
             auto recv_time = std::chrono::high_resolution_clock::now();
-            symbolQueues[symbol].push(QueuedFIXMessage(message, recv_time));
+            symbolQueues[symbol].push(message, recv_time);
         }
         std::string FIXMarketDataEngine::generate_request_id() {
             int req_id = next_req_id.fetch_add(1, std::memory_order_relaxed);
@@ -142,11 +135,46 @@ namespace pascal {
         }
         void FIXMarketDataEngine::process_market_data(const std::string& symbol) {
             QueuedFIXMessage message;
-            while (true) {
-                if (symbolQueues[symbol].pop(message)) {
+            MessageQueue& msgQueue = symbolQueues[symbol];
+            while (is_running.load(std::memory_order_acquire)) {
+                if (msgQueue.pop(message)) {
                     parser->parse_message(message.message, message.recv_time);
                 }
+                else {
+                    std::this_thread::sleep_for(std::chrono::nanoseconds(100)); //sleep for 100ns
+                }
             }
+        }
+        void FIXMarketDataEngine::start_symbol_processing() {
+            int core_id = 2;
+            for (auto symbol : tradedSymbols) {
+                symbolsThreads[symbol] = std::thread([this, symbol]() {
+                    process_market_data(symbol);
+                });
+
+                bind_thread_to_core(symbolsThreads[symbol], core_id++);
+            }
+        }
+        void FIXMarketDataEngine::stop_symbol_processing() {
+            is_running.store(false, std::memory_order_release);
+            for (auto symbol : tradedSymbols) {
+                symbolsThreads[symbol].join();
+            }
+            symbolQueues.clear();
+            symbolsThreads.clear();
+        }
+        void FIXMarketDataEngine::bind_thread_to_core(std::thread& thread, int core_id) {
+            #ifdef __linux__
+
+            cpu_set_t cpuset;
+            CPU_ZERO(&cpuset);
+            CPU_SET(core_id, &cpuset);
+
+            int rc = pthread_setaffinity_np(thread.native_handle(), sizeof(cpu_set_t), &cpuset);
+            if (rc != 0) {
+                std::cerr << "Failed to bind thread to core id " << core_id << std::endl;
+            }
+            #endif
         }
     }
 }

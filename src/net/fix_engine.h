@@ -37,7 +37,10 @@ namespace pascal {
 
                 QueuedFIXMessage() = default;
                 QueuedFIXMessage(const FIX::Message& message, const std::chrono::high_resolution_clock::time_point& recv_time) : message(message), recv_time(recv_time) {}
+                QueuedFIXMessage& operator=(QueuedFIXMessage&& msg) = default;
             };
+            
+            using MessageQueue = pascal::common::SPSCQueue<QueuedFIXMessage, 8192>;
 
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
@@ -104,8 +107,8 @@ namespace pascal {
             std::unique_ptr<FIX::FileLogFactory> log_factory_;
 
             //Thread level data queue
-            std::unordered_map<std::string, pascal::common::SPSCQueue<QueuedFIXMessage, 8192>> symbolQueues;
-            std::unordered_map<std::string, std::unique_ptr<std::thread>> symbolsThreads;
+            std::unordered_map<std::string, MessageQueue> symbolQueues;
+            std::unordered_map<std::string, std::thread> symbolsThreads;
             std::vector<std::string> tradedSymbols;
             FIX::SessionID sessionID;
             std::atomic<bool> is_logged_on{false};
@@ -120,7 +123,12 @@ namespace pascal {
 
             std::string send_market_data_request(const MarketDataRequest& req);
             std::string generate_request_id(); //generate MDReqID
+            
+            //Thread lifecycle management
+            void start_symbol_processing();
+            void stop_symbol_processing();
             void process_market_data(const std::string& symbol);
+            void bind_thread_to_core(std::thread& thread, int core_id);
         };
     };
 };
