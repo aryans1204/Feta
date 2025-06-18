@@ -20,12 +20,12 @@ namespace pascal {
 
             template<typename... Args>
             bool push(Args&&... args) {
-                size_t write_idx = writeIdx_.load(std::mmeory_order_relaxed);
+                size_t write_idx = writeIdx_.load(std::memory_order_relaxed);
                 size_t nextIdx = (write_idx+1)%data_.size();
                 if (nextIdx == readIdx_.load(std::memory_order_acquire)) return false; //Queue full
 
                 //In place construction through perfect forwarding
-                new (&data[write_idx]) T(std::forward<Args>(args)...);
+                new (&data_[write_idx]) T(std::forward<Args>(args)...);
 
                 //Store new write index
                 writeIdx_.store(nextIdx, std::memory_order_release);
@@ -47,7 +47,7 @@ namespace pascal {
                 return true;
             }
             bool empty() const {
-                return readIdx_.load(std::memory_order_acquire) == writeIdx_.load(std::memory+order_acquire);
+                return readIdx_.load(std::memory_order_acquire) == writeIdx_.load(std::memory_order_acquire);
             }
             constexpr size_t capacity() const {
                 return Capacity;

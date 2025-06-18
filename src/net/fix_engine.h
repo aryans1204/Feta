@@ -34,13 +34,14 @@ namespace pascal {
             struct QueuedFIXMessage {
                 FIX::Message message;
                 std::chrono::high_resolution_clock::time_point recv_time;
-
+                
                 QueuedFIXMessage() = default;
                 QueuedFIXMessage(const FIX::Message& message, const std::chrono::high_resolution_clock::time_point& recv_time) : message(message), recv_time(recv_time) {}
+                QueuedFIXMessage(QueuedFIXMessage&& msg) = default;
                 QueuedFIXMessage& operator=(QueuedFIXMessage&& msg) = default;
             };
             
-            using MessageQueue = pascal::common::SPSCQueue<QueuedFIXMessage, 8192>;
+            using MessageQueue = pascal::common::SPSCQueue<QueuedFIXMessage, 16384>;
 
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
@@ -84,9 +85,9 @@ namespace pascal {
             void sub_to_symbol(MarketDataRequest& req);
             void unsub_to_symbol(const std::string& symbol);
             
-            template<class T>
-            void register_parser_callback(T clbk) {
-                parser->register_callback(clbk);
+            template<typename T>
+            void register_parser_callback(T&& clbk) {
+                parser->register_callback(std::forward<T>(clbk));
             }
 
             //Application lifecycle

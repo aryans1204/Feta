@@ -8,7 +8,9 @@ namespace pascal {
             return messaged_processed.load(std::memory_order_relaxed);
         }
         double FIXMarketDataParser::get_average_processing_time() const {
-            return time_spent_processing.load(std::memory_order_relaxed)/messaged_processed.load(std::memory_order_relaxed);
+            auto processed = messaged_processed.load(std::memory_order_relaxed);
+            if (processed == 0) return 0.0;
+            return time_spent_processing.load(std::memory_order_relaxed) / processed;
         }
         void FIXMarketDataParser::parse_message(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time) {
             FIX::MsgType type;
@@ -31,7 +33,6 @@ namespace pascal {
             message.getField(symbol);
             FIX::NoMDEntries numEntries;
             message.getField(numEntries);
-            std::vector<pascal::common::PriceLevel> bids, asks;
             FIX44::MarketDataSnapshotFullRefresh::NoMDEntries group;
             FIX::MDEntryType MDEntryType;
             FIX::MDEntryPx MDEntryPx;
@@ -46,13 +47,15 @@ namespace pascal {
                 group.get(MDEntrySize);
                 double price = MDEntryPx.getValue();
                 double qty = MDEntrySize.getValue();
-                pascal::common::Side side = static_cast<pascal::common::Side>(MDEntryType.getValue());
-                if (side == pascal::common::Side::BID) bids.push_back(pascal::common::PriceLevel{Price: price, Quantity: qty});
-                else asks.push_back(pascal::common::PriceLevel{Price: price, Quantity: qty});
+                char entry_type = MDEntryType.getValue();
+                pascal::common::Side side;
+                if (entry_type == '0') side = pascal::common::Side::BID;
+                else if (entry_type == '1') side = pascal::common::Side::OFFER;
+                else continue; // Skip invalid entry types
+                if (side == pascal::common::Side::BID) snapshot.bids.push_back(pascal::common::PriceLevel{.Price = price, .Quantity = qty});
+                else if (side == pascal::common::Side::OFFER) snapshot.asks.push_back(pascal::common::PriceLevel{.Price = price, .Quantity = qty});
             }
 
-            snapshot.asks = std::move(asks);
-            snapshot.bids = std::move(bids);
             snapshot.recv_time = recv_time;
 
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -68,7 +71,6 @@ namespace pascal {
             message.getField(action);
             FIX::NoMDEntries numEntries;
             message.getField(numEntries);
-            std::vector<pascal::common::MarketDataEntry> entries;
             FIX44::MarketDataSnapshotFullRefresh::NoMDEntries group;
             FIX::MDEntryType MDEntryType;
             FIX::MDEntryPx MDEntryPx;
@@ -84,12 +86,20 @@ namespace pascal {
                 group.get(MDEntrySize);
                 double price = MDEntryPx.getValue();
                 double qty = MDEntrySize.getValue();
-                pascal::common::Side side = static_cast<pascal::common::Side>(MDEntryType.getValue());
-                entries.push_back(pascal::common::MarketDataEntry{side: side, priceLevel: pascal::common::PriceLevel{Price: price, Quantity: qty}, update_action: static_cast<pascal::common::UpdateAction>(action.getValue())});
+                char entry_type = MDEntryType.getValue();
+                pascal::common::Side side;
+                if (entry_type == '0') side = pascal::common::Side::BID;
+                else if (entry_type == '1') side = pascal::common::Side::OFFER;
+                else continue; // Skip invalid entry types
+                update.md_entries.push_back(pascal::common::MarketDataEntry{.side = side, .priceLevel = pascal::common::PriceLevel{.Price = price, .Quantity = qty}, .update_action = static_cast<pascal::common::UpdateAction>(action.getValue())});
             }
 
-            update.md_entries = std::move(entries);
             update.marketDepth = static_cast<uint32_t>(numEntries);
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            uint64_t processing_time = std::chrono::duration_cast<std::chrono::microseconds>(end_time-recv_time).count();
+            messaged_processed.fetch_add(1, std::memory_order_relaxed);
+            time_spent_processing.fetch_add(processing_time, std::memory_order_relaxed);
             return update;
         }
 

@@ -14,14 +14,14 @@ namespace pascal {
                 return true;
             }
             catch (std::exception& e) {
-                std::cerr << "Failed to start QUickFIX initiator" << e.what() << std::endl;
+                std::cerr << "Failed to start QuickFIX initiator" << e.what() << std::endl;
                 return false;
             }
         }
         bool FIXMarketDataEngine::stop() {
             try {
-                initiator_->stop();
                 stop_symbol_processing();
+                initiator_->stop();
                 return true;
             }
             catch (std::exception& e) {
@@ -30,11 +30,14 @@ namespace pascal {
             }
         }
         bool FIXMarketDataEngine::is_logged() const {
-            return is_logged_on.load(std::memory_order_relaxed);
+            return is_logged_on.load(std::memory_order_acquire);
         }
         void FIXMarketDataEngine::onLogon(const FIX::SessionID& sessionID) {
             this->sessionID = sessionID;
-            is_logged_on.store(true);
+            is_logged_on.store(true, std::memory_order_release);
+        }
+        void FIXMarketDataEngine::onLogout(const FIX::SessionID& sessionID) {
+            is_logged_on.store(false, std::memory_order_release);
         }
         void FIXMarketDataEngine::toAdmin(FIX::Message& message, const FIX::SessionID& sessionID) {
             FIX::MsgType msgType;
@@ -67,6 +70,8 @@ namespace pascal {
             return msgType.getString()+SOH+senderCompId.getString()+SOH+targetCompId.getString()+SOH+msgSeqNum.getString()+SOH+sendingTime.getString();
         }
         void FIXMarketDataEngine::fromApp(const FIX::Message& message, const FIX::SessionID& sessionID) {
+            if (!message.isSetField(FIX::Symbol::FIELD)) return;
+            
             FIX::Symbol symbol;
             message.getField(symbol); 
             auto recv_time = std::chrono::high_resolution_clock::now();
@@ -116,22 +121,23 @@ namespace pascal {
             return req_id;
         }
         void FIXMarketDataEngine::sub_to_symbol(MarketDataRequest& request) {
-            subscription_mtx.lock();
+            FIX::Locker lock(subscription_mtx);
             request.Subscribe = '1';
             std::string req_id = send_market_data_request(request);
             active_subscriptions[request.Symbol] = req_id;
-            subscription_mtx.unlock();
         }
         void FIXMarketDataEngine::unsub_to_symbol(const std::string& symbol) {
-            subscription_mtx.lock();
-            std::string req_id = active_subscriptions[symbol];
+            FIX::Locker lock(subscription_mtx);
+            auto it = active_subscriptions.find(symbol);
+            if (it == active_subscriptions.end()) return;
+            
+            std::string req_id = it->second;
             MarketDataRequest request;
             request.ReqID = req_id;
             request.Subscribe = '2';
             request.Symbol = symbol;
             send_market_data_request(request);
-            active_subscriptions.erase(symbol);
-            subscription_mtx.unlock();
+            active_subscriptions.erase(it);
         }
         void FIXMarketDataEngine::process_market_data(const std::string& symbol) {
             QueuedFIXMessage message;
@@ -147,7 +153,7 @@ namespace pascal {
         }
         void FIXMarketDataEngine::start_symbol_processing() {
             int core_id = 2;
-            for (auto symbol : tradedSymbols) {
+            for (const auto& symbol : tradedSymbols) {
                 symbolsThreads[symbol] = std::thread([this, symbol]() {
                     process_market_data(symbol);
                 });
@@ -157,7 +163,7 @@ namespace pascal {
         }
         void FIXMarketDataEngine::stop_symbol_processing() {
             is_running.store(false, std::memory_order_release);
-            for (auto symbol : tradedSymbols) {
+            for (const auto& symbol : tradedSymbols) {
                 symbolsThreads[symbol].join();
             }
             symbolQueues.clear();
