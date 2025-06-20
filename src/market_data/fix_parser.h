@@ -39,7 +39,7 @@ namespace pascal {
             SnapshotCallback snapshotClbk;
             IncrementalCallback incrementalClbk;
             TradeCallback tradeClbk;
-
+            
             pascal::common::MarketDataSnapshot parse_snapshot(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time);
             pascal::common::MarketDataIncrement parse_increment(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time);
             pascal::common::MarketDataEntry parse_raw_trade(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time);
