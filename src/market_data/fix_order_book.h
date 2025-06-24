@@ -1,14 +1,25 @@
 #pragma once
-#include "market_data/fix_parser.h"
+#include "common/types.h"
 #include <shared_mutex>
-#include <map>
+#include <atomic>
+#include <vector>
+#include <unordered_map>
+#include <memory>
+#include <algorithm>
+
+
+#define MAX_ORDERS 10000
 
 namespace pascal {
     namespace market_data {
         class FIXOrderBook {
         public:
 
-            FIXOrderBook(const std::string& symbol) : symbol(symbol) {}
+            FIXOrderBook(const std::string& symbol) : symbol(symbol) {
+                //prevent resizing
+                bids.reserve(MAX_ORDERS);
+                asks.reserve(MAX_ORDERS);
+            }
             
             //Book reconstruction interface
             void initialize_from_snapshot(const pascal::common::MarketDataSnapshot& snapshot);
@@ -32,22 +43,88 @@ namespace pascal {
             uint64_t get_total_updates_processed() const;
 
         private:
-            using BidMap = std::map<double, double, std::greater<double>>; //descending bids
-            using AskMap = std::map<double, double>; //ascending asks
+            using BidMap = std::vector<pascal::common::PriceLevel>; //ascending bids
+            using AskMap = std::vector<pascal::common::PriceLevel>; //descending asks
 
+            std::atomic<uint64_t> version_{0};
             std::string symbol;
             BidMap bids;
             AskMap asks;
 
-            mutable std::shared_mutex book_mtx;
             std::atomic<bool> is_synchronized_{false};
             std::atomic<uint64_t> total_updates_processed{0};
             std::chrono::high_resolution_clock::time_point last_update_time;
 
-            void apply_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel);
-            void delete_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel);
-            void change_best_quote(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel);
-            void change_quote(pascal::common::Side, const pascal::common::PriceLevel& priceLevel);
+            inline void apply_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
+                if (side == pascal::common::Side::BID) {
+                    auto bestIt = bids.end()-1;
+                    if (bestIt->Price == priceLevel.Price) {
+                        bestIt->Quantity += priceLevel.Quantity;
+                    }
+                    else {
+                        bids.emplace_back(priceLevel);
+                    }
+                }
+                else {
+                    auto bestIt = asks.end()-1;
+                    if (bestIt->Price == priceLevel.Price) {
+                        bestIt->Quantity += priceLevel.Quantity;
+                    }
+                    else {
+                        asks.emplace_back(priceLevel);
+                    }
+                }
+            }
+            inline void delete_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
+                if (side == pascal::common::Side::BID) {
+                    auto bestIt = bids.end()-1;
+                    bestIt->Quantity -= priceLevel.Quantity;
+                    if (!bestIt->Quantity) {
+                        bids.pop_back();
+                    }
+                }
+                else {
+                    auto bestIt = asks.end()-1;
+                    bestIt->Quantity -= priceLevel.Quantity;
+                    if (!bestIt->Quantity) {
+                        asks.pop_back();
+                    }
+                }
+            }
+            inline void change_best_quote(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
+                if (side == pascal::common::Side::BID) {
+                    auto bestIt = bids.end()-1;
+                    *bestIt = priceLevel;
+                }
+                else {
+                    auto bestIt = asks.rbegin();
+                    *bestIt = priceLevel;
+                }
+            }
+            inline void change_quote(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
+                if (side == pascal::common::Side::BID) {
+                    auto it = std::find_if(bids.begin(), bids.end(), [priceLevel](auto& a) {
+                        return a.Price == priceLevel.Price;
+                    });
+                    if (priceLevel.Quantity == 0) {
+                        bids.erase(it);
+                    }
+                    else {
+                        it->Quantity = priceLevel.Quantity;
+                    }
+                }
+                else {
+                    auto it = std::find_if(asks.begin(), asks.end(), [priceLevel](auto& a) {
+                        return a.Price == priceLevel.Price;
+                    });
+                    if (priceLevel.Quantity == 0) {
+                        asks.erase(it);
+                    }
+                    else {
+                        it->Quantity = priceLevel.Quantity;
+                    }
+                }
+            }
 
         };
 

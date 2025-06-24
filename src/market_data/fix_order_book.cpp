@@ -5,20 +5,24 @@
 namespace pascal {
     namespace market_data {
         void FIXOrderBook::initialize_from_snapshot(const pascal::common::MarketDataSnapshot& snapshot) {
-            std::unique_lock(book_mtx);
-            for (auto priceLevel : snapshot.bids) {
-                bids[priceLevel.Price] = priceLevel.Quantity;
-            }
-            for (auto priceLevel: snapshot.asks) {
-                asks[priceLevel.Price] = priceLevel.Quantity;
-            }
-            is_synchronized_.store(true, std::memory_order_relaxed);
-            total_updates_processed.fetch_add(1, std::memory_order_relaxed);
+            uint64_t newVersion = version_.load()+1;
+            bids = std::move(snapshot.bids);
+            std::sort(bids.begin(), bids.end(), [](auto a, auto b) {
+                return a.Price < b.Price;
+            });
+            asks = std::move(snapshot.asks);
+            std::sort(bids.begin(), bids.end(), [](auto a, auto b) {
+                return a.Price > b.Price;
+            });
+            is_synchronized_.store(true, std::memory_order_release);
+            total_updates_processed.fetch_add(1, std::memory_order_release);
             last_update_time = std::chrono::high_resolution_clock::now();
+            version_.store(newVersion, std::memory_order_release);
         }
         void FIXOrderBook::update_from_increment(const pascal::common::MarketDataIncrement& update) {
-            std::unique_lock(book_mtx);
-            for (auto md: update.md_entries) {
+            uint64_t newVersion = version_.load()+1;
+            if (update.marketDepth == 1) {
+                auto md = update.md_entries.front();
                 switch (md.update_action) {
                     case pascal::common::UpdateAction::NEW :
                         apply_price_level(md.side, md.priceLevel);
@@ -38,111 +42,165 @@ namespace pascal {
                         break; 
                 }
             }
+            else {
+                for (auto md : update.md_entries) {
+                    std::vector<pascal::common::PriceLevel>::iterator it;
+                    if (md.side == pascal::common::BID) {
+                        auto priceLevel = md.priceLevel;
+                        it = std::find_if(bids.begin(), bids.end(), [priceLevel](auto& price) {
+                            return priceLevel.Price <= price.Price;
+                        });
+                    }
+                    else {
+                        auto priceLevel = md.priceLevel;
+                        it = std::find_if(asks.begin(), asks.end(), [priceLevel](auto& price) {
+                            return priceLevel.Price >= price.Price;
+                        });
+                    }
+
+                    switch (md.update_action) {
+                        case pascal::common::UpdateAction::NEW :
+                            if (md.side == pascal::common::BID) {
+                                if (it == bids.end()) {
+                                    bids.emplace_back(md.priceLevel);
+                                }
+                                else if (it->Price == md.priceLevel.Price) {
+                                    it->Quantity += md.priceLevel.Quantity;
+                                }
+                                else {
+                                    bids.emplace(it, md.priceLevel);
+                                }
+                            }
+                            else {
+                                if (it == asks.end()) {
+                                    asks.emplace_back(md.priceLevel);
+                                }
+                                else if (it->Price == md.priceLevel.Price) {
+                                    it->Quantity += md.priceLevel.Quantity;
+                                }
+                                else {
+                                    asks.emplace(it, md.priceLevel);
+                                }
+                            }
+                            break;
+
+                        case pascal::common::UpdateAction::DELETE :
+                            it->Quantity -= md.priceLevel.Quantity;
+                            if (md.side == pascal::common::BID) {
+                                if (it->Quantity == 0) bids.erase(it);
+                            }
+                            else {
+                                if (it->Quantity == 0) asks.erase(it);
+                            }
+                            break;
+
+                        case pascal::common::UpdateAction::CHANGE :
+                            it->Quantity = md.priceLevel.Quantity;
+                            break; 
+                    }
+                }
+            }
             is_synchronized_.store(true, std::memory_order_relaxed);
             total_updates_processed.fetch_add(1, std::memory_order_relaxed);
             last_update_time = std::chrono::high_resolution_clock::now();
+            version_.store(newVersion, std::memory_order_release);
         }
-        void FIXOrderBook::apply_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
-            if (side == pascal::common::Side::BID) {
-                bids[priceLevel.Price] += priceLevel.Quantity;
-            }
-            else {
-                asks[priceLevel.Price] += priceLevel.Quantity;
-            }
-        }
-        void FIXOrderBook::delete_price_level(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
-            if (side == pascal::common::Side::BID) {
-                bids[priceLevel.Price] -= priceLevel.Quantity;
-                if (!bids[priceLevel.Price]) bids.erase(priceLevel.Price);
-            }
-            else {
-                asks[priceLevel.Price] -= priceLevel.Quantity;
-                if (!asks[priceLevel.Price]) asks.erase(priceLevel.Price);
-            }
-        }
-        void FIXOrderBook::change_best_quote(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
-            if (side == pascal::common::Side::BID) {
-                auto iter = bids.begin();
-                auto priceQty = *iter;
-                bids.erase(priceQty.first);
-                bids[priceLevel.Price] = priceLevel.Quantity;
-            }
-            else {
-                auto iter = asks.begin();
-                auto priceQty = *iter;
-                asks.erase(priceQty.first);
-                asks[priceLevel.Price] = priceLevel.Quantity;
-            }
-        }
-        void FIXOrderBook::change_quote(pascal::common::Side side, const pascal::common::PriceLevel& priceLevel) {
-            if (side == pascal::common::Side::BID) {
-                if (priceLevel.Quantity == 0) {
-                    bids.erase(priceLevel.Price);
-                }
-                else {
-                    bids[priceLevel.Price] = priceLevel.Quantity;
-                }
-            }
-            else {
-                if (priceLevel.Quantity == 0) {
-                    asks.erase(priceLevel.Price);
-                }
-                else {
-                    asks[priceLevel.Price] = priceLevel.Quantity;
-                }
-            }
-        }
+        
         pascal::common::PriceLevel FIXOrderBook::get_best_bid() const {
-            std::shared_lock(book_mtx);
-            return pascal::common::PriceLevel{Price: bids.begin()->first, Quantity: bids.begin()->second};
+            uint64_t v1, v2;
+            pascal::common::PriceLevel result;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                result = bids.back();
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+
+            return result;
         }
         pascal::common::PriceLevel FIXOrderBook::get_best_ask() const {
-            std::shared_lock(book_mtx);
-            return pascal::common::PriceLevel{Price: asks.begin()->first, Quantity: asks.begin()->second};
+            uint64_t v1, v2;
+            pascal::common::PriceLevel result;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                result = asks.back();
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+
+            return result;
         }
         std::vector<pascal::common::PriceLevel> FIXOrderBook::get_bids(size_t depth = 10) const {
-            std::shared_lock(book_mtx);
-            std::vector<pascal::common::PriceLevel> prices;
-            auto it = bids.begin();
-            for (int i = 0; i < depth; i++) {
-                prices.push_back(pascal::common::PriceLevel{Price: it->first, Quantity: it->second});
-                it++;
-                if (it == bids.end()) return prices;
-            }
-            return prices;
+            uint64_t v1, v2;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+            
+            return bids;
         }
         std::vector<pascal::common::PriceLevel> FIXOrderBook::get_asks(size_t depth = 10) const {
-            std::shared_lock(book_mtx);
-            std::vector<pascal::common::PriceLevel> prices;
-            auto it = asks.begin();
-            for (int i = 0; i < depth; i++) {
-                prices.push_back(pascal::common::PriceLevel{Price: it->first, Quantity: it->second});
-                it++;
-                if (it == asks.end()) return prices;
-            }
-            return prices;
+            uint64_t v1, v2;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+            
+            return asks;
         }
         double FIXOrderBook::get_bid_quantity_at_price(double price) {
-            std::shared_lock(book_mtx);
-            return bids[price];
+            uint64_t v1, v2;
+            double quantity = 0;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                auto it = std::find_if(bids.begin(), bids.end(), [price](auto priceLvl) {
+                    return priceLvl.Price == price;
+                });
+                quantity = it->Quantity;
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+            
+            return quantity;
         }
         double FIXOrderBook::get_ask_quantity_at_price(double price) {
-            std::shared_lock(book_mtx);
-            return asks[price];
+            uint64_t v1, v2;
+            double quantity = 0;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                auto it = std::find_if(asks.begin(), asks.end(), [price](auto priceLvl) {
+                    return priceLvl.Price == price;
+                });
+                quantity = it->Quantity;
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+            
+            return quantity;
         }
         bool FIXOrderBook::is_synchronized() const {
-            return is_synchronized_.load(std::memory_order_relaxed);
+            return is_synchronized_.load(std::memory_order_acquire);
         }
         std::chrono::high_resolution_clock::time_point FIXOrderBook::get_last_update_time() const {
             return last_update_time;
         }
         size_t FIXOrderBook::get_total_bid_levels() const {
-            std::shared_lock(book_mtx);
-            return bids.size();
+            uint64_t v1, v2;
+            size_t size;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                size = bids.size();
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+
+            return size;
         }
         size_t FIXOrderBook::get_total_ask_levels() const {
-            std::shared_lock(book_mtx);
-            return asks.size();
+            uint64_t v1, v2;
+            size_t size;
+            do {
+                v1 = version_.load(std::memory_order_acquire);
+                size = asks.size();
+                v2 = version_.load(std::memory_order_acquire);
+            } while (v1 != v2);
+
+            return size;
         }
         uint64_t FIXOrderBook::get_total_updates_processed() const {
             return total_updates_processed.load(std::memory_order_relaxed);
