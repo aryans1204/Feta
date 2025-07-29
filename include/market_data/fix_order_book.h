@@ -22,7 +22,7 @@ namespace pascal {
             }
             
             //Book reconstruction interface
-            void initialize_from_snapshot(const pascal::common::MarketDataSnapshot& snapshot);
+            void initialize_from_snapshot(pascal::common::MarketDataSnapshot& snapshot);
             void update_from_increment(const pascal::common::MarketDataIncrement& update);
 
             //Query interface
@@ -130,14 +130,14 @@ namespace pascal {
 
         class FIXOrderBookManager {
         public:
-            FIXOrderBookManager();
+            FIXOrderBookManager() {}
 
             //Book manager
             void add_symbol(const std::string& symbol);
             void remove_symbol(const std::string& symbol);
 
             //Book processors
-            void process_snapshot(const pascal::common::MarketDataSnapshot& snapshot);
+            void process_snapshot(pascal::common::MarketDataSnapshot& snapshot);
             void process_increment(const pascal::common::MarketDataIncrement& update);
 
             //Query interface

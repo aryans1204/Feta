@@ -4,14 +4,14 @@
 
 namespace pascal {
     namespace market_data {
-        void FIXOrderBook::initialize_from_snapshot(const pascal::common::MarketDataSnapshot& snapshot) {
+        void FIXOrderBook::initialize_from_snapshot(pascal::common::MarketDataSnapshot& snapshot) {
             uint64_t newVersion = version_.load()+1;
             bids = std::move(snapshot.bids);
             std::sort(bids.begin(), bids.end(), [](auto a, auto b) {
                 return a.Price < b.Price;
             });
             asks = std::move(snapshot.asks);
-            std::sort(bids.begin(), bids.end(), [](auto a, auto b) {
+            std::sort(asks.begin(), asks.end(), [](auto a, auto b) {
                 return a.Price > b.Price;
             });
             is_synchronized_.store(true, std::memory_order_release);
@@ -128,7 +128,7 @@ namespace pascal {
 
             return result;
         }
-        std::vector<pascal::common::PriceLevel> FIXOrderBook::get_bids(size_t depth = 10) const {
+        std::vector<pascal::common::PriceLevel> FIXOrderBook::get_bids(size_t depth) const {
             uint64_t v1, v2;
             do {
                 v1 = version_.load(std::memory_order_acquire);
@@ -137,7 +137,7 @@ namespace pascal {
             
             return bids;
         }
-        std::vector<pascal::common::PriceLevel> FIXOrderBook::get_asks(size_t depth = 10) const {
+        std::vector<pascal::common::PriceLevel> FIXOrderBook::get_asks(size_t depth) const {
             uint64_t v1, v2;
             do {
                 v1 = version_.load(std::memory_order_acquire);
@@ -207,14 +207,14 @@ namespace pascal {
         }
 
         void FIXOrderBookManager::add_symbol(const std::string& symbol) {
-            std::unique_lock(book_mtx);
-            books[symbol] = std::make_shared<FIXOrderBook>();
+            std::unique_lock<std::shared_mutex> lk(book_mtx);
+            books[symbol] = std::make_shared<FIXOrderBook>(symbol);
         }
         void FIXOrderBookManager::remove_symbol(const std::string& symbol) {
-            std::unique_lock(book_mtx);
+            std::unique_lock<std::shared_mutex> lk(book_mtx);
             books.erase(symbol);
         }
-        void FIXOrderBookManager::process_snapshot(const pascal::common::MarketDataSnapshot& snapshot) {
+        void FIXOrderBookManager::process_snapshot(pascal::common::MarketDataSnapshot& snapshot) {
             std::string symbol = snapshot.symbol;
             books[symbol]->initialize_from_snapshot(snapshot);
             total_updates_processed.fetch_add(1, std::memory_order_relaxed);
@@ -225,11 +225,11 @@ namespace pascal {
             total_updates_processed.fetch_add(1, std::memory_order_relaxed);
         }
         std::shared_ptr<FIXOrderBook> FIXOrderBookManager::get_book_by_symbol(const std::string& symbol) {
-            std::shared_lock(book_mtx);
+            std::shared_lock<std::shared_mutex> lk(book_mtx);
             return books[symbol];
         }   
         std::vector<std::string> FIXOrderBookManager::get_symbols() const {
-            std::shared_lock(book_mtx);
+            std::shared_lock<std::shared_mutex> lk(book_mtx);
             std::vector<std::string> symbols(books.size());
             std::transform(books.begin(), books.end(), symbols.begin(), [](auto a) {
                 return a.first;
@@ -237,7 +237,7 @@ namespace pascal {
             return symbols;
         }
         size_t FIXOrderBookManager::get_total_books() const {
-            std::shared_lock(book_mtx);
+            std::shared_lock<std::shared_mutex> lk(book_mtx);
             return books.size();
         }
         uint64_t FIXOrderBookManager::get_total_updates_processed() const {

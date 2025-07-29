@@ -40,5 +40,20 @@ namespace pascal {
             std::vector<PriceLevel> asks;
             std::chrono::high_resolution_clock::time_point recv_time;
         };
+
+        enum MarketDataSubscriptionType {
+            RAW_TRADE,
+            TOP_OF_BOOK,
+            FULL_BOOK
+        };
+
+        struct MarketDataRequest {
+            MarketDataSubscriptionType Stream;
+            std::string Symbol;
+            int MarketDepth;
+            Side MDEntryType;
+            char Subscribe;
+            std::string ReqID;
+        };
     };
 };

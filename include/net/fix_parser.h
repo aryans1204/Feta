@@ -14,8 +14,8 @@ namespace pascal {
             using IncrementalCallback = std::function<void(const pascal::common::MarketDataIncrement& )>;
             using TradeCallback = std::function<void(const pascal::common::MarketDataEntry& )>;
 
-            FIXMarketDataParser();
-            ~FIXMarketDataParser();
+            FIXMarketDataParser() = default;
+            ~FIXMarketDataParser() = default;
 
             //Register callbacks
             void register_callback(const SnapshotCallback& clbk) {

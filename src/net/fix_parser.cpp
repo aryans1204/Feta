@@ -1,4 +1,4 @@
-#include "market_data/fix_parser.h"
+#include "net/fix_parser.h"
 #include "quickfix/fix44/MarketDataSnapshotFullRefresh.h"
 #include <algorithm>
 
@@ -14,7 +14,7 @@ namespace pascal {
         }
         void FIXMarketDataParser::parse_message(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time) {
             FIX::MsgType type;
-            message.getField(type);
+            message.getHeader().getField(type);
             if (type == FIX::MsgType_MarketDataSnapshotFullRefresh) {
                 pascal::common::MarketDataSnapshot snapshot = parse_snapshot(message, recv_time);
                 snapshotClbk(snapshot);
@@ -22,10 +22,6 @@ namespace pascal {
             else if (type == FIX::MsgType_MarketDataIncrementalRefresh) {
                 pascal::common::MarketDataIncrement update = parse_increment(message, recv_time);
                 incrementalClbk(update);
-            }
-            else {
-                pascal::common::MarketDataEntry trade = parse_raw_trade(message, recv_time);
-                tradeClbk(trade);
             }
         }
         pascal::common::MarketDataSnapshot FIXMarketDataParser::parse_snapshot(const FIX::Message& message, std::chrono::high_resolution_clock::time_point recv_time) {

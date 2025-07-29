@@ -1,6 +1,6 @@
 #include "catch2/catch_test_macros.hpp"
 #include "catch2/catch_approx.hpp"
-#include "market_data/fix_parser.h"
+#include "net/fix_parser.h"
 #include <thread>
 #include <vector>
 #include "quickfix/fix44/MarketDataIncrementalRefresh.h"
@@ -14,7 +14,7 @@ namespace pascal {
 
         class FIXParserTestFeature {
         public:
-            pascal::market_data::FIXParser parser;
+            pascal::market_data::FIXMarketDataParser parser;
             std::vector<pascal::common::MarketDataSnapshot> snapshots;
             std::vector<pascal::common::MarketDataIncrement> increments;
 
@@ -85,14 +85,15 @@ namespace pascal {
             }
         };
 
-        CREATE_TEST_METHOD(FIXParserTestFeature, "FIX Parser - Snapshot Parsing", "[fix_parser]") {
+        TEST_CASE("FIX Parser - Snapshot Parsing", "[fix_parser]") {
+            FIXParserTestFeature feature;
             SECTION("Parse valid snapshot message") {
-                auto testSnapshot = create_test_snapshot();
+                auto testSnapshot = feature.create_test_snapshot();
                 auto recv_time = std::chrono::high_resolution_clock::now();
-                parser.parse_message(testSnapshot, recv_time);
+                feature.parser.parse_message(testSnapshot, recv_time);
 
-                REQUIRE(snapshots.size() == 1);
-                auto& snapshot = snapshots[0];
+                REQUIRE(feature.snapshots.size() == 1);
+                auto& snapshot = feature.snapshots[0];
                 
                 CHECK(snapshot.symbol == "BTCUSDT");
                 CHECK(snapshot.bids.size() == 2);
@@ -103,12 +104,12 @@ namespace pascal {
                 CHECK(snapshot.asks[0].Quantity == 1.2);
             }
             SECTION("Parse empty snapshot message") {
-                auto testSnapshot = create_test_snapshot("ETHUSDT", {}, {});
+                auto testSnapshot = feature.create_test_snapshot("ETHUSDT", {}, {});
                 auto recv_time = std::chrono::high_resolution_clock::now();
-                parser.parse_message(testSnapshot, recv_time);
+                feature.parser.parse_message(testSnapshot, recv_time);
 
-                REQUIRE(snapshots.size() == 1);
-                auto& snapshot = snapshots[0];
+                REQUIRE(feature.snapshots.size() == 1);
+                auto& snapshot = feature.snapshots[0];
 
                 CHECK(snapshot.symbol == "ETHUSDT");
                 CHECK(snapshot.bids.empty());
@@ -116,15 +117,16 @@ namespace pascal {
             }
         }
 
-        CREATE_TEST_METHOD(FIXParserTestFeature, "FIX Parser - Increment Parsing", "[fix_parser]") {
+        TEST_CASE("FIX Parser - Increment Parsing", "[fix_parser]") {
+            FIXParserTestFeature feature;
             SECTION("Parse bid update") {
-                auto testIncrement = create_test_increment();
+                auto testIncrement = feature.create_test_increment();
 
                 auto recv_time = std::chrono::high_resolution_clock::now();
-                parser.parse_message(testSnapshot, recv_time);
+                feature.parser.parse_message(testIncrement, recv_time);
 
-                REQUIRE(increments.size() == 1);
-                auto& increment = increments[0];
+                REQUIRE(feature.increments.size() == 1);
+                auto& increment = feature.increments[0];
 
                 CHECK(increment.symbol == "BTCUSDT");
                 CHECK(increment.marketDepth == 1);
@@ -134,15 +136,15 @@ namespace pascal {
                 CHECK(increment.md_entries[0].priceLevel.Quantity == 1.0);
             }
             SECTION("Parse ask update") {
-                auto testIncrement = create_test_increment("ETHUSDT", '0', '1', 500001.0, 1.0);
+                auto testIncrement = feature.create_test_increment("ETHUSDT", '0', '1', 500001.0, 1.0);
 
                 auto recv_time = std::chrono::high_resolution_clock::now();
-                parser.parse_message(testSnapshot, recv_time);
+                feature.parser.parse_message(testIncrement, recv_time);
 
-                REQUIRE(increments.size() == 1);
-                auto& increment = increments[0];
+                REQUIRE(feature.increments.size() == 1);
+                auto& increment = feature.increments[0];
 
-                CHECK(increment.md_entries[0].side == pascal::common::SIde::OFFER);
+                CHECK(increment.md_entries[0].side == pascal::common::Side::OFFER);
             }
         }
     }

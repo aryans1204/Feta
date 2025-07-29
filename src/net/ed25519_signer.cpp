@@ -1,115 +1,144 @@
 // src/networking/ed25519_signer.cpp
-#include "ed25519_signer.h"
-#include <sodium.h>
+#include "net/ed25519_signer.h"
 #include <stdexcept>
-#include <array>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <iostream>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
+#include <openssl/err.h>
 
 namespace pascal {
 namespace crypto {
 
-class Ed25519Signer::Impl {
-public:
-    std::array<unsigned char, crypto_sign_SECRETKEYBYTES> secret_key;
-    std::array<unsigned char, crypto_sign_PUBLICKEYBYTES> public_key;
-    
-    Impl(const std::string& private_key_pem) {
-        if (sodium_init() < 0) {
-            throw std::runtime_error("Failed to initialize libsodium");
-        }
-        
-        // Parse PEM private key
-        load_private_key_from_pem(private_key_pem);
+bool Ed25519Signer::loadPrivateKeyFromFile(const std::string& filename) {
+    FILE* fp = fopen(filename.c_str(), "rb");
+    if (!fp) {
+        std::cerr << "Error: Cannot open private key file: " << filename << std::endl;
+        return false;
     }
-    
-    void load_private_key_from_pem(const std::string& pem_data) {
-        // Remove PEM headers and decode base64
-        std::string key_data = extract_key_from_pem(pem_data);
-        
-        // Ed25519 private key in PEM is 32 bytes after ASN.1 parsing
-        if (key_data.size() != 32) {
-            throw std::runtime_error("Invalid Ed25519 private key size");
-        }
-        
-        // Copy seed (private key)
-        std::copy(key_data.begin(), key_data.end(), secret_key.begin());
-        
-        // Generate public key from private key
-        crypto_sign_seed_keypair(public_key.data(), secret_key.data(), 
-                               reinterpret_cast<const unsigned char*>(key_data.data()));
-    }
-    
-    std::string extract_key_from_pem(const std::string& pem_data) {
-        // Simple PEM parser - in production use OpenSSL or proper ASN.1 parser
-        size_t start = pem_data.find("-----BEGIN PRIVATE KEY-----");
-        size_t end = pem_data.find("-----END PRIVATE KEY-----");
-        
-        if (start == std::string::npos || end == std::string::npos) {
-            throw std::runtime_error("Invalid PEM format");
-        }
-        
-        start += 27; // Length of "-----BEGIN PRIVATE KEY-----"
-        std::string base64_data = pem_data.substr(start, end - start);
-        
-        // Remove whitespace
-        base64_data.erase(std::remove_if(base64_data.begin(), base64_data.end(),
-                         [](char c) { return std::isspace(c); }), base64_data.end());
-        
-        return base64_decode(base64_data);
-    }
-    
-    std::string base64_decode(const std::string& encoded) {
-        // Implement base64 decode or use a library
-        // For production, use a proper base64 library
-        // This is simplified for demonstration
-        std::vector<unsigned char> decoded(encoded.size());
-        size_t decoded_len;
-        
-        if (sodium_base642bin(decoded.data(), decoded.size(),
-                            encoded.c_str(), encoded.size(),
-                            nullptr, &decoded_len, nullptr,
-                            sodium_base64_VARIANT_ORIGINAL) != 0) {
-            throw std::runtime_error("Base64 decode failed");
-        }
-        
-        return std::string(decoded.begin(), decoded.begin() + decoded_len);
-    }
-    
-    std::string base64_encode(const unsigned char* data, size_t len) {
-        std::vector<char> encoded(sodium_base64_ENCODED_LEN(len, sodium_base64_VARIANT_ORIGINAL));
-        
-        sodium_bin2base64(encoded.data(), encoded.size(),
-                         data, len, sodium_base64_VARIANT_ORIGINAL);
-        
-        return std::string(encoded.data());
-    }
-};
 
-Ed25519Signer::Ed25519Signer(const std::string& private_key_pem)
-    : pimpl_(std::make_unique<Impl>(private_key_pem)) {
+    private_key_ = PEM_read_PrivateKey(fp, nullptr, nullptr, nullptr);
+    fclose(fp);
+
+    if (!private_key_) {
+        std::cerr << "Error: Failed to load private key from PEM file" << std::endl;
+        ERR_print_errors_fp(stderr);
+        return false;
+    }
+
+    // Verify it's an Ed25519 key
+    if (EVP_PKEY_id(private_key_) != EVP_PKEY_ED25519) {
+        std::cerr << "Error: Key is not Ed25519" << std::endl;
+        EVP_PKEY_free(private_key_);
+        private_key_ = nullptr;
+        return false;
+    }
+
+    return true;
 }
 
+bool Ed25519Signer::loadPrivateKeyFromString(const std::string& pem_data) {
+    BIO* bio = BIO_new_mem_buf(pem_data.c_str(), -1);
+    if (!bio) {
+        std::cerr << "Error: Failed to create BIO from PEM data" << std::endl;
+        return false;
+    }
+
+    private_key_ = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+
+    if (!private_key_) {
+        std::cerr << "Error: Failed to load private key from PEM string" << std::endl;
+        ERR_print_errors_fp(stderr);
+        return false;
+    }
+
+    // Verify it's an Ed25519 key
+    if (EVP_PKEY_id(private_key_) != EVP_PKEY_ED25519) {
+        std::cerr << "Error: Key is not Ed25519" << std::endl;
+        EVP_PKEY_free(private_key_);
+        private_key_ = nullptr;
+        return false;
+    }
+
+    return true;
+}
 
 std::string Ed25519Signer::sign_payload(const std::string& payload) const {
-    std::array<unsigned char, crypto_sign_BYTES> signature;
-    unsigned long long signature_len;
-    
-    // Sign the payload
-    if (crypto_sign_detached(signature.data(), &signature_len,
-                           reinterpret_cast<const unsigned char*>(payload.c_str()),
-                           payload.size(),
-                           pimpl_->secret_key.data()) != 0) {
-        throw std::runtime_error("Ed25519 signing failed");
+    if (!private_key_) {
+        std::cerr << "Error: No private key loaded" << std::endl;
+        return "";
     }
+
+    // Create signing context
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        std::cerr << "Error: Failed to create signing context" << std::endl;
+        return "";
+    }
+
+    // Initialize signing
+    if (EVP_DigestSignInit(ctx, nullptr, nullptr, nullptr, private_key_) <= 0) {
+        std::cerr << "Error: Failed to initialize signing" << std::endl;
+        EVP_MD_CTX_free(ctx);
+        ERR_print_errors_fp(stderr);
+        return "";
+    }
+
+    // Determine signature length
+    size_t sig_len = 0;
+    if (EVP_DigestSign(ctx, nullptr, &sig_len, 
+                        reinterpret_cast<const unsigned char*>(payload.c_str()), 
+                        payload.length()) <= 0) {
+        std::cerr << "Error: Failed to determine signature length" << std::endl;
+        EVP_MD_CTX_free(ctx);
+        ERR_print_errors_fp(stderr);
+        return "";
+    }
+
+    // Create signature
+    std::vector<unsigned char> signature(sig_len);
+    if (EVP_DigestSign(ctx, signature.data(), &sig_len,
+                        reinterpret_cast<const unsigned char*>(payload.c_str()),
+                        payload.length()) <= 0) {
+        std::cerr << "Error: Failed to create signature" << std::endl;
+        EVP_MD_CTX_free(ctx);
+        ERR_print_errors_fp(stderr);
+        return "";
+    }
+
+    EVP_MD_CTX_free(ctx);
+
+    // Encode to base64
+    return base64encode(signature.data(), sig_len);
+}
+
+std::string Ed25519Signer::base64encode(unsigned char* data, size_t length) const {
+    BIO* bio = BIO_new(BIO_s_mem());
+    BIO* b64 = BIO_new(BIO_f_base64());
     
-    // Return base64 encoded signature
-    return pimpl_->base64_encode(signature.data(), signature_len);
+    // Don't add newlines
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+    
+    bio = BIO_push(b64, bio);
+    
+    BIO_write(bio, data, length);
+    BIO_flush(bio);
+    
+    BUF_MEM* buffer;
+    BIO_get_mem_ptr(bio, &buffer);
+    
+    std::string result(buffer->data, buffer->length);
+    
+    BIO_free_all(bio);
+    
+    return result;
 }
 
-std::string Ed25519Signer::get_public_key_base64() const {
-    return pimpl_->base64_encode(pimpl_->public_key.data(), crypto_sign_PUBLICKEYBYTES);
-}
-
-Ed25519Signer::~Ed25519Signer() = default;
 
 }} // namespace pascal::crypto

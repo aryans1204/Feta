@@ -1,0 +1,78 @@
+# Binance FIX API Configuration for Pascal Trading System
+# This configuration is optimized for high-frequency market data consumption
+
+[DEFAULT]
+# Connection and session settings
+ConnectionType=initiator
+ReconnectInterval=2
+FileStorePath=./store
+FileLogPath=./log
+
+# Message handling - optimized for low latency
+PersistMessages=Y
+ValidateUserDefinedFields=N
+ValidateFieldsOutOfOrder=N
+ValidateFieldsHaveValues=N
+ValidateUnorderedGroupFields=N
+AllowUnknownMsgFields=Y
+
+# Network optimizations for high-frequency trading
+SocketConnectPort=13005
+SocketConnectHost=127.0.0.1
+SocketNodelay=Y
+SocketSendBufferSize=65536
+SocketReceiveBufferSize=65536
+
+# Heartbeat and timeout settings
+HeartBtInt=10
+LogonTimeout=30
+LogoutTimeout=5
+
+# Message sequence handling
+ResetOnLogon=Y
+ResetOnLogout=Y
+ResetOnDisconnect=Y
+SSLEnable=N
+
+# Logging configuration
+ScreenLogShowIncoming=Y
+ScreenLogShowOutgoing=Y
+ScreenLogShowEvents=Y
+
+# Data dictionary (Binance uses FIX 4.4)
+DataDictionary=/home/arsha/Pascal/config/FIX44.xml
+AppDataDictionary=/home/arsha/Pascal/config/FIX44.xml
+
+[SESSION]
+# Session identification
+BeginString=FIX.4.4
+SenderCompID=ldkmTuR6lZGutZGE1okdxUx55quLiGFf6GGrlFT9pfq8IABYRDxChMwoBgayZ7Wg
+TargetCompID=SPOT
+
+# Session schedule (24/7 for crypto markets)
+StartTime=00:00:00
+EndTime=00:00:00
+StartDay=Sunday
+EndDay=Saturday
+
+# Message sequence numbers
+UseDataDictionary=Y
+
+# Binance-specific settings
+# Username field will be set programmatically with your API key
+# RawData field will contain the Ed25519 signature
+# These are handled in your FIXMarketDataEngine::sign_logon_message() method
+
+# Performance optimizations
+CheckLatency=N
+MaxLatency=120
+ResendRequestChunkSize=0
+
+# Market data specific settings
+# Enable market data message types
+MsgSeqNum=1
+SendRedundantResendRequests=Y
+
+# Additional Binance-specific optimizations
+RefreshOnLogon=N
+ResetSeqNumFlag=Y

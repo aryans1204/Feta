@@ -5,10 +5,12 @@
 #include <string>
 #include <functional>
 #include <thread>
+#include <stdexcept>
 
-#include "market_data/fix_parser.h"
-#include "ed25519_signer.h"
+#include "net/fix_parser.h"
+#include "net/ed25519_signer.h"
 #include "common/lockfree_spsc_queue.h"
+#include "common/types.h"
 #include "quickfix/Application.h"
 #include "quickfix/Mutex.h"
 #include "quickfix/Utility.h"
@@ -26,7 +28,7 @@
 
 
 namespace pascal {
-    namespace fix {
+    namespace net {
 
         class FIXMarketDataEngine : public FIX::Application {
         public:
@@ -46,43 +48,38 @@ namespace pascal {
             std::unique_ptr<pascal::crypto::Ed25519Signer> signer_; //Key signer for Logon
             std::string api_key;
             
-            typedef enum MarketDataSubscriptionType {
-                RAW_TRADE,
-                TOP_OF_BOOK,
-                FULL_BOOK
-            };
 
-            struct MarketDataRequest {
-                MarketDataSubscriptionType Stream;
-                std::string Symbol;
-                int MarketDepth;
-                char MDEntryType;
-                char Subscribe;
-                std::string ReqID;
-            };
-
-            FIXMarketDataEngine(const std::string& fixConfig, const std::string& private_key_pem, const std::string& api_key, const std::vector<std::string>& tradedSymbols) : api_key(api_key), signer_(std::make_unique<pascal::crypto::Ed25519Signer>(private_key_pem)), tradedSymbols(tradedSymbols) 
+            FIXMarketDataEngine(const std::string& fixConfig, const std::string& private_key_pem, const std::string& api_key, const std::vector<std::string>& tradedSymbols) : api_key(api_key), tradedSymbols(tradedSymbols) 
             {
                 settings_ = std::make_unique<FIX::SessionSettings>(fixConfig);
-                store_factory_ = std::make_unique<FIX::FileStoreFactory>(settings_);
-                log_factory_ = std::make_unique<FIX::FileLogFactory>(settings_);
+                store_factory_ = std::make_unique<FIX::FileStoreFactory>(*settings_);
+                log_factory_ = std::make_unique<FIX::FileLogFactory>(*settings_);
                 initiator_ = std::make_unique<FIX::SocketInitiator>(*this, *store_factory_, *settings_, *log_factory_);
-                parser = std::make_unique<pascal::market_data::FIXMarketDataParser>(); 
+                parser = std::make_unique<pascal::market_data::FIXMarketDataParser>();
+
+                signer_ = std::make_unique<pascal::crypto::Ed25519Signer>();
+                if (!signer_->loadPrivateKeyFromFile(private_key_pem)) {
+                    std::runtime_error("Private Key cannot be loaded from file");
+                } 
             };
-            ~FIXMarketDataEngine();
+            ~FIXMarketDataEngine() {
+                if (is_running.load(std::memory_order_acquire)) {
+                    stop();
+                }
+            }
 
             //Application overloads
-            void onCreate(const FIX::SessionID& ) override;
+            void onCreate(const FIX::SessionID& ) {}
             void onLogon(const FIX::SessionID& ) override;
-            void onLogout(const FIX::SessionID& )override;
+            void onLogout(const FIX::SessionID& ) override;
             void toAdmin(FIX::Message&, const FIX::SessionID& ) override;
-            void toApp(FIX::Message&, const FIX::SessionID& ) override;
+            void toApp(FIX::Message&, const FIX::SessionID& ) {}
             void fromAdmin(const FIX::Message&, const FIX::SessionID& ) override;
             void fromApp(const FIX::Message&, const FIX::SessionID&) override;
 
             
             //Engine logic
-            void sub_to_symbol(MarketDataRequest& req);
+            void sub_to_symbol(pascal::common::MarketDataRequest& req);
             void unsub_to_symbol(const std::string& symbol);
             
             template<typename T>
@@ -122,7 +119,7 @@ namespace pascal {
             
             std::atomic<int> next_req_id{1};
 
-            std::string send_market_data_request(const MarketDataRequest& req);
+            std::string send_market_data_request(const pascal::common::MarketDataRequest& req);
             std::string generate_request_id(); //generate MDReqID
             
             //Thread lifecycle management

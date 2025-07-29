@@ -1,11 +1,13 @@
 
-#include "fix_engine.h"
+#include "net/fix_engine.h"
 #include <chrono>
 #include <thread>
-#include "ed25519_signer.h"
+#include "net/ed25519_signer.h"
+#include "common/types.h"
+#include <stdexcept>
 
 namespace pascal {
-    namespace fix {
+    namespace net {
         bool FIXMarketDataEngine::start() {
             try {
                 initiator_->start();
@@ -42,13 +44,28 @@ namespace pascal {
         void FIXMarketDataEngine::toAdmin(FIX::Message& message, const FIX::SessionID& sessionID) {
             FIX::MsgType msgType;
             message.getHeader().getField(msgType);
-
+            std::cout << "Sending to admin: " << msgType.getValue() << std::endl;
             if (msgType == FIX::MsgType_Logon) {
                 sign_logon_message(message);
+                message.setField(FIX::IntField(25035, 1));
+                message.setField(FIX::IntField(25036, 1));
+                message.setField(FIX::IntField(25000, 5000));
+                std::cout << message.toString() << std::endl;
+            }
+        }
+        void FIXMarketDataEngine::fromAdmin(const FIX::Message& message, const FIX::SessionID& sessionID) {
+            FIX::MsgType msgType;
+            message.getHeader().getField(msgType);
+            std::cout << "HI" << std::endl;
+            if (msgType == FIX::MsgType_Reject) {
+                FIX::Text text;
+                message.getField(text);
+                std::cerr << "Text is: " << text.getString() << std::endl;  
             }
         }
         void FIXMarketDataEngine::sign_logon_message(FIX::Message& message) {
             std::string payload = create_logon_payload(message);
+            std::cout << "Payload is: " << payload << std::endl;
             std::string signature = signer_->sign_payload(payload);
 
             message.setField(FIX::Username(api_key));
@@ -65,14 +82,15 @@ namespace pascal {
             message.getHeader().getField(senderCompId);
             message.getHeader().getField(targetCompId);
             message.getHeader().getField(msgSeqNum);
+            std::cout << "MsgSeqNum: " << msgSeqNum.getValue() << std::endl;
             message.getHeader().getField(sendingTime);
             const char SOH = '\x01';
-            return msgType.getString()+SOH+senderCompId.getString()+SOH+targetCompId.getString()+SOH+msgSeqNum.getString()+SOH+sendingTime.getString();
+            return msgType.getString()+SOH+senderCompId.getString()+SOH+targetCompId.getString()+SOH+std::to_string(msgSeqNum.getValue())+SOH+sendingTime.getString();
         }
         void FIXMarketDataEngine::fromApp(const FIX::Message& message, const FIX::SessionID& sessionID) {
-            if (!message.isSetField(FIX::Symbol::FIELD)) return;
+            FIX::Symbol symbol; 
+            if (!message.isSetField(symbol)) return;
             
-            FIX::Symbol symbol;
             message.getField(symbol); 
             auto recv_time = std::chrono::high_resolution_clock::now();
             symbolQueues[symbol].push(message, recv_time);
@@ -82,11 +100,11 @@ namespace pascal {
             return std::to_string(req_id);
 
         }
-        std::string FIXMarketDataEngine::send_market_data_request(const MarketDataRequest& request) {
+        std::string FIXMarketDataEngine::send_market_data_request(const pascal::common::MarketDataRequest& request) {
             FIX44::MarketDataRequest req;
             FIX::Header& header = req.getHeader();
             header.setField(FIX::BeginString("FIX.4.4"));
-            header.setField(FIX::SenderCompID("ARYAN"));
+            header.setField(FIX::SenderCompID("PASCAL_MD"));
             header.setField(FIX::TargetCompID("SPOT"));
             header.setField(FIX::MsgType(FIX::MsgType_MarketDataRequest));
             req.setField(FIX::SubscriptionRequestType(request.Subscribe));
@@ -100,16 +118,16 @@ namespace pascal {
             req.setField(FIX::MDReqID(req_id));
             
             switch(request.Stream) {
-                case MarketDataSubscriptionType::RAW_TRADE:
-                    req.setField(FIX::MDEntryType('2'));
+                case pascal::common::MarketDataSubscriptionType::RAW_TRADE:
+                    req.setField(FIX::MDEntryType(request.MDEntryType));
                     break;
                 
-                case MarketDataSubscriptionType::TOP_OF_BOOK:
+                case pascal::common::MarketDataSubscriptionType::TOP_OF_BOOK:
                     req.setField(FIX::MDEntryType(request.MDEntryType));
                     req.setField(FIX::MarketDepth(1));
                     break;
 
-                case MarketDataSubscriptionType::FULL_BOOK:
+                case pascal::common::MarketDataSubscriptionType::FULL_BOOK:
                     req.setField(FIX::MDEntryType(request.MDEntryType));
                     req.setField(FIX::MarketDepth(request.MarketDepth));
                     break;
@@ -120,7 +138,7 @@ namespace pascal {
             FIX::Session::sendToTarget(req, sessionID);
             return req_id;
         }
-        void FIXMarketDataEngine::sub_to_symbol(MarketDataRequest& request) {
+        void FIXMarketDataEngine::sub_to_symbol(pascal::common::MarketDataRequest& request) {
             FIX::Locker lock(subscription_mtx);
             request.Subscribe = '1';
             std::string req_id = send_market_data_request(request);
@@ -132,7 +150,7 @@ namespace pascal {
             if (it == active_subscriptions.end()) return;
             
             std::string req_id = it->second;
-            MarketDataRequest request;
+            pascal::common::MarketDataRequest request;
             request.ReqID = req_id;
             request.Subscribe = '2';
             request.Symbol = symbol;
@@ -152,7 +170,7 @@ namespace pascal {
             }
         }
         void FIXMarketDataEngine::start_symbol_processing() {
-            int core_id = 2;
+            int core_id = 1;
             for (const auto& symbol : tradedSymbols) {
                 symbolsThreads[symbol] = std::thread([this, symbol]() {
                     process_market_data(symbol);
